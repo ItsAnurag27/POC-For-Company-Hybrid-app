@@ -38,53 +38,63 @@ This Proof of Concept (PoC) demonstrates a production-ready AWS deployment pipel
 | **Container Orchestration** | AWS ECS (Fargate) |
 | **CI/CD** | AWS CodePipeline + CodeBuild |
 | **Container Registry** | Amazon ECR |
+| **ML Model Management** | AWS SageMaker (Training, Registry, Endpoints) |
 | **Load Balancing** | Application Load Balancer (ALB) |
-| **Model Storage** | S3 + SSM Parameter Store |
+| **Model Storage** | Amazon SageMaker Model Registry + S3 |
+| **Model Deployment** | SageMaker Real-time Endpoints / Multi-Model Endpoints |
 | **Database** | RDS/DynamoDB (optional) |
-| **Monitoring** | CloudWatch Logs + Metrics |
+| **Monitoring** | CloudWatch Logs + Metrics + SageMaker Model Monitor |
 | **Infrastructure as Code** | Terraform (recommended) |
-| **Security** | IAM Roles, Secrets Manager, ACM |
+| **Security** | IAM Roles, Secrets Manager, ACM, SageMaker Network Isolation |
 
 ---
 
 ## Architecture
 
-### High-Level Diagram
+### High-Level Diagram (Enhanced with SageMaker)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    MOBILE APP CLIENTS                           │
-│              (React Native / Flutter / Ionic)                   │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                    HTTPS (ACM SSL)
-                          │
-        ┌─────────────────▼─────────────────┐
+┌────────────────────────────────────────────────────────────────────┐
+│                    MOBILE APP CLIENTS                              │
+│              (React Native / Flutter / Ionic)                      │
+└────────────────────────┬───────────────────────────────────────────┘
+                         │
+                   HTTPS (ACM SSL)
+                         │
+        ┌────────────────▼──────────────────┐
         │   Application Load Balancer       │
         │      (ALB - Public Subnets)       │
         └──┬──────────────────────┬─────────┘
            │                      │
     Path: /api/*          Path: /ml/*
            │                      │
-    ┌──────▼──────┐        ┌──────▼──────┐
-    │   Backend   │        │  ML Model   │
-    │   Service   │        │   Service   │
-    │  (ECS Task) │        │  (ECS Task) │
-    └──────┬──────┘        └──────┬──────┘
+    ┌──────▼──────┐        ┌──────▼─────────┐
+    │   Backend   │        │  ML Service    │
+    │   Service   │◄──────►│ (SageMaker     │
+    │  (ECS Task) │        │ Endpoint)      │
+    └──────┬──────┘        └──────┬─────────┘
            │                      │
            └──────┬───────────────┘
                   │
-        ┌─────────▼──────────┐
-        │   Amazon ECR       │
-        │  (Image Registry)  │
-        └────────┬───────────┘
-                 │
-    ┌────────────┼────────────┐
-    │            │            │
-┌───▼──┐    ┌────▼──┐    ┌───▼──┐
-│ S3   │    │Secrets│    │Cloud │
-│Model │    │Manager│    │Watch │
-└──────┘    └───────┘    └──────┘
+        ┌─────────▼──────────────────┐
+        │  ECR + SageMaker Registry  │
+        │  (Image & Model Artifacts) │
+        └─────────┬──────────────────┘
+                  │
+    ┌─────────────┼──────────────┬──────────────┐
+    │             │              │              │
+┌───▼──┐   ┌─────▼──┐    ┌──────▼─┐   ┌───────▼────────┐
+│ S3   │   │Secrets │    │Cloud   │   │ SageMaker      │
+│Model │   │Manager │    │Watch   │   │ Model Monitor  │
+│Store │   │        │    │Logs    │   │ (Data Drift)   │
+└──────┘   └────────┘    └────────┘   └────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│    SageMaker Training Pipeline                                     │
+│  (Automated model retraining, evaluation, and versioning)          │
+│                                                                    │
+│ Data Prep → Training Job → Model Evaluation → Registry → Endpoint │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Component Details
@@ -115,14 +125,23 @@ This Proof of Concept (PoC) demonstrates a production-ready AWS deployment pipel
 - **Application Load Balancer**: Distributes traffic with path-based routing
 
 #### 5. **Data & Storage**
-- **S3**: Model artifact storage (pkl, h5, ONNX formats)
+- **S3**: Model artifact storage (pkl, h5, ONNX formats) + training data
+- **SageMaker Model Registry**: Centralized model versioning and metadata
 - **RDS/DynamoDB**: Application database (optional for PoC)
 - **Secrets Manager**: Secure credential storage
 
-#### 6. **Monitoring & Observability**
+#### 6. **ML Ops with SageMaker**
+- **SageMaker Training Jobs**: Automated model training with hyperparameter tuning
+- **SageMaker Real-time Endpoints**: Low-latency inference for production predictions
+- **SageMaker Multi-Model Endpoints**: Host multiple model versions efficiently
+- **SageMaker Model Monitor**: Detect data/prediction drift in production
+- **SageMaker Pipelines**: Orchestrate end-to-end ML workflows
+
+#### 7. **Monitoring & Observability**
 - **CloudWatch Logs**: Centralized logging for all services
 - **CloudWatch Metrics**: Performance monitoring and alarms
 - **CloudWatch Dashboard**: Real-time service health visualization
+- **SageMaker Model Monitor**: Track model quality metrics and data drift
 
 ---
 
@@ -1216,6 +1235,381 @@ s3://ml-models-bucket/
 
 ---
 
+## AWS SageMaker Integration (Enhanced ML Ops)
+
+### Why SageMaker for This PoC?
+
+SageMaker transforms the ML workflow from manual model management to production-grade MLOps:
+
+| Feature | Benefit for PoC |
+|---------|-----------------|
+| **Model Registry** | Version control for models with metadata tracking |
+| **Real-time Endpoints** | Low-latency predictions at scale (better than ECS tasks) |
+| **Model Monitor** | Automatic detection of data drift and prediction drift |
+| **Multi-Model Endpoints** | Host multiple model versions - cost-effective A/B testing |
+| **Training Jobs** | Automated training with HPO (hyperparameter optimization) |
+| **Pipelines** | Orchestrate ML workflows (data prep → train → evaluate → deploy) |
+| **Built-in Algorithms** | Pre-optimized algorithms for common ML tasks |
+
+### Phase 1: Deploy ML Service on SageMaker Endpoint
+
+#### Step 1: Create SageMaker Endpoint (instead of ECS task)
+
+```python
+# Deploy trained model to SageMaker Real-time Endpoint
+import boto3
+import json
+
+sagemaker_client = boto3.client('sagemaker', region_name='ap-south-1')
+
+# Create model
+response = sagemaker_client.create_model(
+    ModelName='prediction-model-v1',
+    PrimaryContainer={
+        'Image': '382416733822.dkr.ecr.ap-south-1.amazonaws.com/xgboost:latest',
+        'ModelDataUrl': 's3://ml-models-bucket/v1.0/model.tar.gz',
+        'Environment': {
+            'SAGEMAKER_PROGRAM': 'inference.py',
+            'SAGEMAKER_SUBMIT_DIRECTORY': 's3://ml-models-bucket/code.tar.gz'
+        }
+    },
+    ExecutionRoleArn='arn:aws:iam::ACCOUNT_ID:role/SageMakerRole'
+)
+
+# Create endpoint configuration
+sagemaker_client.create_endpoint_config(
+    EndpointConfigName='prediction-endpoint-config',
+    ProductionVariants=[
+        {
+            'VariantName': 'AllTraffic',
+            'ModelName': 'prediction-model-v1',
+            'InstanceType': 'ml.m5.large',
+            'InitialInstanceCount': 2
+        }
+    ]
+)
+
+# Create endpoint
+sagemaker_client.create_endpoint(
+    EndpointName='prediction-endpoint',
+    EndpointConfigName='prediction-endpoint-config',
+    Tags=[
+        {'Key': 'Environment', 'Value': 'production'},
+        {'Key': 'Project', 'Value': 'ML-Deployment'}
+    ]
+)
+
+print("Endpoint deployed successfully!")
+```
+
+#### Step 2: Update Backend to Call SageMaker Endpoint
+
+```python
+# Updated backend API to use SageMaker endpoint
+from fastapi import FastAPI
+import boto3
+import json
+
+app = FastAPI(title="Backend API v2 (SageMaker)")
+sagemaker_runtime = boto3.client('sagemaker-runtime', region_name='ap-south-1')
+
+@app.post("/api/predict")
+async def predict(data: dict):
+    """
+    Call SageMaker endpoint directly instead of separate ML service
+    """
+    try:
+        # Invoke SageMaker endpoint
+        response = sagemaker_runtime.invoke_endpoint(
+            EndpointName='prediction-endpoint',
+            ContentType='application/json',
+            Body=json.dumps({"instances": [data['features']]})
+        )
+        
+        # Parse response
+        result = json.loads(response['Body'].read().decode())
+        
+        return {
+            "prediction": result['predictions'][0],
+            "endpoint": "sagemaker",
+            "model_version": result.get('model_version', 'unknown')
+        }
+    except Exception as e:
+        return {"error": str(e), "status": 500}
+```
+
+#### Step 3: Update CodePipeline for SageMaker Deployment
+
+Add SageMaker deployment stage to CodePipeline:
+
+```json
+{
+  "name": "Deploy-SageMaker",
+  "actions": [
+    {
+      "name": "DeploySageMakerEndpoint",
+      "actionTypeId": {
+        "category": "Deploy",
+        "owner": "AWS",
+        "provider": "ServiceCatalog",
+        "version": "1"
+      },
+      "configuration": {
+        "TemplateUrl": "s3://cf-templates-bucket/sagemaker-endpoint.yml",
+        "CapabilitiesParameter": "CAPABILITY_NAMED_IAM"
+      },
+      "inputArtifacts": [{"name": "BuildOutput"}]
+    }
+  ]
+}
+```
+
+### Phase 2: Use SageMaker Model Registry
+
+#### Register Trained Models
+
+```python
+# Register model in SageMaker Model Registry
+import boto3
+
+sm_client = boto3.client('sagemaker')
+
+# Create model package (for registry)
+model_package_response = sm_client.create_model_package(
+    ModelPackageName='prediction-model-pkg-v1',
+    ModelPackageDescription='XGBoost model for customer prediction',
+    ModelMetrics={
+        'ModelQuality': {
+            'Statistics': {
+                'ContentType': 'application/json',
+                'S3Uri': 's3://ml-metrics-bucket/model-quality-metrics.json'
+            }
+        }
+    },
+    CertifyForMarketplace=False,
+    ModelApprovalStatus='PendingManualApproval'  # Requires approval before prod
+)
+
+# Create model package group
+sm_client.create_model_package_group(
+    ModelPackageGroupName='prediction-models',
+    ModelPackageGroupDescription='All prediction models'
+)
+
+print(f"Model registered: {model_package_response['ModelPackageArn']}")
+```
+
+#### Approve & Deploy Model Versions
+
+```bash
+# Approve model for production
+aws sagemaker update-model-package \
+  --model-package-arn arn:aws:sagemaker:ap-south-1:ACCOUNT_ID:model-package/prediction-model-pkg-v1 \
+  --model-approval-status Approved
+
+# List all model versions
+aws sagemaker list-model-packages \
+  --model-package-group-name prediction-models \
+  --sort-order Descending
+```
+
+### Phase 3: Enable Model Monitoring & Drift Detection
+
+#### Create SageMaker Model Monitor
+
+```python
+import boto3
+from sagemaker.model_monitor import DataCaptureConfig, ModelMonitor
+
+sm_client = boto3.client('sagemaker')
+
+# Enable data capture on endpoint
+data_capture_config = DataCaptureConfig(
+    enabled=True,
+    sampling_percentage=100,
+    destination_s3_uri='s3://model-monitoring-bucket/data-capture'
+)
+
+# Create monitoring baseline from training data
+model_monitor = ModelMonitor(
+    role='arn:aws:iam::ACCOUNT_ID:role/SageMakerRole',
+    instance_count=1,
+    instance_type='ml.m5.xlarge',
+    volume_size_in_gb=30,
+    max_runtime_in_seconds=3600
+)
+
+# Generate baseline statistics
+baseline_job_name = model_monitor.suggest_baseline(
+    job_name='prediction-baseline-job',
+    baseline_dataset='s3://training-data-bucket/baseline.csv',
+    dataset_format={'csv': {'header': True}},
+    output_s3_uri='s3://monitoring-bucket/baseline'
+)
+
+print(f"Baseline job: {baseline_job_name}")
+```
+
+#### Set Up Drift Detection Alarms
+
+```python
+# Create data quality monitoring schedule
+sm_client.create_monitoring_schedule(
+    MonitoringScheduleName='prediction-data-quality',
+    MonitoringScheduleConfig={
+        'ScheduleExpression': 'cron(0 12 * * ? *)',  # Daily at noon
+        'MonitoringJobDefinition': {
+            'BaselineConfig': {
+                'BaseliningJobName': baseline_job_name
+            },
+            'MonitoringInputs': [
+                {
+                    'EndpointInput': {
+                        'EndpointName': 'prediction-endpoint',
+                        'LocalPath': '/opt/ml/processing/input',
+                        'S3InputMode': 'File',
+                        'S3DataDistributionType': 'FullyReplicated'
+                    }
+                }
+            ],
+            'MonitoringOutputConfig': {
+                'MonitoringOutputs': [
+                    {
+                        'S3Output': {
+                            'S3Uri': 's3://monitoring-bucket/output',
+                            'LocalPath': '/opt/ml/processing/output',
+                            'S3UploadMode': 'EndOfJob'
+                        }
+                    }
+                ]
+            },
+            'RoleArn': 'arn:aws:iam::ACCOUNT_ID:role/SageMakerRole',
+            'ProcessingJobDefinition': {
+                'ProcessingJobName': 'prediction-quality-job'
+            }
+        }
+    }
+)
+
+print("Data quality monitoring enabled!")
+```
+
+### Phase 4: Implement SageMaker Pipelines (Optional for PoC+)
+
+#### Automated ML Workflow
+
+```python
+from sagemaker.workflow.pipeline import Pipeline
+from sagemaker.workflow.steps import ProcessingStep, TrainingStep
+from sagemaker.processor import ScriptProcessor
+
+# Define data processing step
+processor = ScriptProcessor(
+    role='arn:aws:iam::ACCOUNT_ID:role/SageMakerRole',
+    image_uri='382416733822.dkr.ecr.ap-south-1.amazonaws.com/sagemaker-scikit-learn:0.20.0-cpu-py3',
+    instance_count=1,
+    instance_type='ml.m5.large'
+)
+
+step_process = ProcessingStep(
+    name='DataPreprocessing',
+    processor=processor,
+    code='preprocess.py',
+    job_arguments=['--input-data', 's3://data-bucket/raw']
+)
+
+# Define training step
+from sagemaker.estimator import Estimator
+
+estimator = Estimator(
+    image_uri='382416733822.dkr.ecr.ap-south-1.amazonaws.com/xgboost:latest',
+    role='arn:aws:iam::ACCOUNT_ID:role/SageMakerRole',
+    instance_count=1,
+    instance_type='ml.m5.xlarge',
+    output_path='s3://model-bucket/output'
+)
+
+step_train = TrainingStep(
+    name='ModelTraining',
+    estimator=estimator,
+    inputs={
+        'training': 's3://data-bucket/processed/train',
+        'validation': 's3://data-bucket/processed/val'
+    }
+)
+
+# Create pipeline
+pipeline = Pipeline(
+    name='prediction-model-pipeline',
+    parameters=[],
+    steps=[step_process, step_train]
+)
+
+pipeline.upsert(role_arn='arn:aws:iam::ACCOUNT_ID:role/SageMakerRole')
+execution = pipeline.start()
+```
+
+### SageMaker Cost Optimization for PoC
+
+```bash
+# Use spot training jobs (70% cheaper)
+aws sagemaker create-training-job \
+  --training-job-name xgboost-spot-training \
+  --enable-spot-training \
+  --max-wait-time-in-seconds 3600 \
+  --max-runtime-in-seconds 1800
+
+# Use multi-model endpoint (consolidate multiple models)
+# Instead of 5 separate endpoints, use 1 multi-model endpoint
+# Cost: ~$0.14/hour vs $0.70/hour for 5 separate endpoints
+```
+
+### SageMaker Monitoring Dashboard
+
+```python
+import boto3
+
+cloudwatch = boto3.client('cloudwatch')
+
+# Create dashboard for model performance
+dashboard_body = {
+    "widgets": [
+        {
+            "type": "metric",
+            "properties": {
+                "metrics": [
+                    ["AWS/SageMaker", "ModelLatency", {"stat": "Average"}],
+                    [".", "ModelInvocations", {"stat": "Sum"}],
+                    [".", "ModelErrors", {"stat": "Sum"}]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "ap-south-1",
+                "title": "SageMaker Endpoint Performance"
+            }
+        },
+        {
+            "type": "metric",
+            "properties": {
+                "metrics": [
+                    ["AWS/SageMaker", "DataQuality", {"stat": "Average"}],
+                    [".", "PredictionDrift", {"stat": "Maximum"}]
+                ],
+                "period": 3600,
+                "title": "Model Quality Metrics"
+            }
+        }
+    ]
+}
+
+cloudwatch.put_dashboard(
+    DashboardName='sagemaker-model-dashboard',
+    DashboardBody=json.dumps(dashboard_body)
+)
+```
+
+---
+
 ## Troubleshooting
 
 ### Common Issues & Solutions
@@ -1336,13 +1730,16 @@ aws elbv2 describe-load-balancers --names prediction-app-alb \
 - [ ] **KMS Encryption** – Encrypt model files at rest in S3
 - [ ] **AWS WAF** – Protect ALB from DDoS and common attacks
 
-### Phase 3: Advanced ML Ops
+### Phase 3: Advanced ML Ops (SageMaker Focus)
 
-- [ ] **Model Registry** – MLflow / SageMaker Model Registry
-- [ ] **A/B Testing** – Canary deployments for new models
-- [ ] **Model Monitoring** – Data drift detection, prediction drift
-- [ ] **Automated Retraining** – Scheduled pipeline for model updates
-- [ ] **Feature Store** – Centralized feature engineering (Feast, SageMaker)
+- [ ] **SageMaker Model Registry** – Centralized model versioning ✨ **PRIORITY**
+- [ ] **SageMaker Real-time Endpoints** – Replace ECS ML service ✨ **PRIORITY**
+- [ ] **SageMaker Model Monitor** – Automated data/prediction drift detection ✨ **PRIORITY**
+- [ ] **SageMaker Pipelines** – End-to-end ML workflow orchestration
+- [ ] **A/B Testing** – Canary deployments for model versions (Multi-Model Endpoints)
+- [ ] **Automated Retraining** – Scheduled SageMaker Training Jobs
+- [ ] **Feature Store** – MLflow / SageMaker Feature Store
+- [ ] **Model Bias Detection** – SageMaker Clarify integration
 
 ### Phase 4: Mobile App Pipeline
 
@@ -1366,6 +1763,115 @@ aws elbv2 describe-load-balancers --names prediction-app-alb \
 - [ ] **Auto-scaling Policies** – Dynamic scaling based on metrics
 - [ ] **Compute Savings Plans** – Flexible EC2 pricing
 - [ ] **Cost Explorer Dashboards** – Track and optimize spending
+
+---
+
+## SageMaker Quick Reference
+
+### Common SageMaker Commands
+
+```bash
+# Create endpoint
+aws sagemaker create-endpoint \
+  --endpoint-name prediction-endpoint \
+  --endpoint-config-name prediction-config
+
+# List endpoints
+aws sagemaker list-endpoints \
+  --sort-by CreationTime \
+  --sort-order Descending
+
+# Check endpoint status
+aws sagemaker describe-endpoint \
+  --endpoint-name prediction-endpoint
+
+# Invoke endpoint
+aws sagemaker-runtime invoke-endpoint \
+  --endpoint-name prediction-endpoint \
+  --content-type application/json \
+  --body '{"instances": [[1.0, 2.0, 3.0]]}' \
+  response.json
+
+# Delete endpoint (to save costs)
+aws sagemaker delete-endpoint --endpoint-name prediction-endpoint
+
+# List models in registry
+aws sagemaker list-model-packages \
+  --model-package-group-name prediction-models
+
+# Enable model monitoring
+aws sagemaker create-monitoring-schedule \
+  --monitoring-schedule-name model-monitoring \
+  --monitoring-schedule-config file://monitoring-config.json
+
+# View model quality reports
+aws sagemaker list-monitoring-executions \
+  --monitoring-schedule-name model-monitoring
+```
+
+### SageMaker IAM Permissions
+
+Required IAM policy for deployment:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sagemaker:CreateEndpoint",
+        "sagemaker:CreateEndpointConfig",
+        "sagemaker:CreateModel",
+        "sagemaker:DescribeEndpoint",
+        "sagemaker:InvokeEndpoint",
+        "sagemaker:UpdateEndpoint",
+        "sagemaker:DeleteEndpoint",
+        "sagemaker:ListEndpoints",
+        "sagemaker:CreateModelPackage",
+        "sagemaker:ListModelPackages",
+        "sagemaker:CreateMonitoringSchedule",
+        "sagemaker:CreateTrainingJob",
+        "sagemaker:CreateProcessingJob"
+      ],
+      "Resource": "arn:aws:sagemaker:*:ACCOUNT_ID:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::ml-models-bucket/*"
+    }
+  ]
+}
+```
+
+### Cost Comparison: ECS vs SageMaker
+
+| Metric | ECS (ML Service) | SageMaker Endpoint |
+|--------|-----------------|-------------------|
+| **Deployment Complexity** | Medium | Low (managed) |
+| **Monthly Cost (2 instances)** | ~$70 | ~$70 |
+| **Monitoring** | Manual CloudWatch | Built-in Model Monitor |
+| **Model Registry** | Manual S3 versioning | Built-in Registry |
+| **Drift Detection** | Manual | Automatic |
+| **Scaling** | Manual ALB | Auto-scaling |
+| **Best For** | Custom inference logic | Standard ML inference |
+
+**Recommendation:** Start with ECS for flexibility, migrate to SageMaker endpoints for production (Phase 3).
 
 ---
 
